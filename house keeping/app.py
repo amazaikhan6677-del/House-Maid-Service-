@@ -1,3 +1,4 @@
+import os
 from flask import Flask, render_template, request, redirect, session, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date
@@ -5,14 +6,11 @@ from datetime import datetime, date
 app = Flask(__name__)
 app.secret_key = "secret123"
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///database.db'
-db = SQLAlchemy(app)
+# Purana 'DATABASE FIX FOR VERCEL' wala section delete karke ye likhein:
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/database.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-#=====language============
-@app.before_request
-def set_default_language():
-    if 'lang' not in session:
-        session['lang'] = 'en'
+db = SQLAlchemy(app)
 
 # =========================
 # DATABASE MODELS
@@ -21,7 +19,7 @@ class Admin(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(100), unique=True)
     password = db.Column(db.String(100))
-    role = db.Column(db.String(20), default="admin")  # main or normal
+    role = db.Column(db.String(20), default="admin")
 
 class Booking(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -32,7 +30,11 @@ class Booking(db.Model):
     time = db.Column(db.String(20))
     status = db.Column(db.String(20), default="Pending")
 
-#========language=====
+# =====language============
+@app.before_request
+def set_default_language():
+    if 'lang' not in session:
+        session['lang'] = 'en'
 
 translations = {
     "en": {
@@ -50,6 +52,7 @@ translations = {
         "service": "الخدمة"
     }
 }
+
 # =========================
 # ROUTES
 # =========================
@@ -58,25 +61,25 @@ translations = {
 def home():
     lang = session.get('lang', 'en')
     texts = translations[lang]
-    return render_template('index.html', texts=texts) # services removed
+    return render_template('index.html', texts=texts)
 
 @app.route('/book', methods=['POST'])
 def book():
-    data = request.form
-    new_booking = Booking(
-        name=data['name'],
-        phone=data['phone'],
-        service=data['service'],
-        date=data['date'],
-        time=data['time']
-    )
-    db.session.add(new_booking)
-    db.session.commit()
-    return "Booking Submitted Successfully!"
+    try:
+        data = request.form
+        new_booking = Booking(
+            name=data['name'],
+            phone=data['phone'],
+            service=data['service'],
+            date=data['date'],
+            time=data['time']
+        )
+        db.session.add(new_booking)
+        db.session.commit()
+        return "Booking Submitted Successfully!"
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-# =========================
-# ADMIN LOGIN
-# =========================
 @app.route('/admin', methods=['GET', 'POST'])
 def admin_login():
     if request.method == 'POST':
@@ -92,9 +95,6 @@ def admin_login():
             flash("Invalid credentials!", "danger")
     return render_template('login.html')
 
-# =========================
-# DASHBOARD
-# =========================
 @app.route('/dashboard')
 def dashboard():
     if 'admin' not in session:
@@ -103,7 +103,6 @@ def dashboard():
     bookings = Booking.query.all()
     admins = Admin.query.all()
     
-    # Convert time to 12-hour AM/PM
     for b in bookings:
         try:
             dt = datetime.strptime(b.time, "%H:%M")
@@ -111,7 +110,6 @@ def dashboard():
         except:
             pass
     
-    # Live stats
     total_bookings = len(bookings)
     today_bookings = len([b for b in bookings if b.date == date.today().strftime("%Y-%m-%d")])
     pending = len([b for b in bookings if b.status=="Pending"])
@@ -125,9 +123,6 @@ def dashboard():
                            pending=pending,
                            accepted=accepted)
 
-# =========================
-# ACCEPT BOOKING
-# =========================
 @app.route('/accept/<int:id>')
 def accept_booking(id):
     booking = Booking.query.get(id)
@@ -135,9 +130,6 @@ def accept_booking(id):
     db.session.commit()
     return redirect('/dashboard')
 
-# =========================
-# DELETE BOOKING
-# =========================
 @app.route('/delete_booking/<int:id>')
 def delete_booking(id):
     booking = Booking.query.get(id)
@@ -145,9 +137,6 @@ def delete_booking(id):
     db.session.commit()
     return redirect('/dashboard')
 
-# =========================
-# ADD ADMIN (main admin only)
-# =========================
 @app.route('/add_admin', methods=['POST'])
 def add_admin():
     if 'admin' not in session or session['role'] != 'main':
@@ -161,9 +150,6 @@ def add_admin():
     db.session.commit()
     return redirect('/dashboard')
 
-# =========================
-# DELETE ADMIN (main admin only)
-# =========================
 @app.route('/delete_admin/<int:id>')
 def delete_admin(id):
     if 'admin' not in session or session['role'] != 'main':
@@ -177,9 +163,6 @@ def delete_admin(id):
     db.session.commit()
     return redirect('/dashboard')
 
-# =========================
-# CHANGE MAIN ADMIN CREDENTIALS
-# =========================
 @app.route('/change_main_admin', methods=['POST'])
 def change_main_admin():
     if 'admin' not in session or session['role'] != 'main':
@@ -191,27 +174,24 @@ def change_main_admin():
     db.session.commit()
     return redirect('/dashboard')
 
-# =========================
-# LOGOUT
-# =========================
 @app.route('/logout')
 def logout():
     session.clear()
     return redirect('/admin')
 
-# =======language============
 @app.route('/set_language/<lang>')
 def set_language(lang):
     session['lang'] = lang
     return redirect(request.referrer)
 
-# =========================
+# --- CREATING TABLES ---
+# Vercel use cases ke liye app context bahar hona chahiye
+with app.app_context():
+    db.create_all()
+    if not Admin.query.filter_by(role='main').first():
+        main_admin = Admin(username="admin", password="1234", role="main")
+        db.session.add(main_admin)
+        db.session.commit()
+
 if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
-        # Create main admin if not exists
-        if not Admin.query.filter_by(role='main').first():
-            main_admin = Admin(username="admin", password="1234", role="main")
-            db.session.add(main_admin)
-            db.session.commit()
     app.run(debug=True)
